@@ -15,10 +15,10 @@ pbp_sets = [
     "concrete",
     "energy",
     "kin8nm",
-    "naval-propulsion-plant",
     "power-plant",
     "wine-quality-red",
     "yacht",
+    "naval-propulsion-plant",
     "protein-tertiary-structure",
 ]
 
@@ -242,7 +242,7 @@ def download_data() -> None:
 
 def get_pbp_sets(
     name: str, batch_size: int, get_val: bool = True
-) -> Tuple[DataLoader, Optional[DataLoader], DataLoader]:
+) -> Tuple[Loader, Optional[Loader], Loader]:
     """
     retrieves the datasets which were used in the following papers
     http://papers.nips.cc/paper/7219-simple-and-scalable-predictive-uncertainty-estimation-using-deep-ensembles.pdf
@@ -287,9 +287,9 @@ def get_pbp_sets(
         test.standard_normalize(*params)
 
         return (
-            DataLoader(train, shuffle=True, batch_size=batch_size),
+            Loader(train, shuffle=True, batch_size=batch_size),
             None,
-            DataLoader(test, batch_size=batch_size),
+            Loader(test, batch_size=batch_size),
         )
 
     val_n = train_idx // 10
@@ -304,16 +304,16 @@ def get_pbp_sets(
     test_ft = data[idx_perm[train_idx:], :-1]
     test_label = data[idx_perm[train_idx:], -1]
 
-    train = PBPDataset(train_ft, train_label, name)
-    val = PBPDataset(val_ft, val_label, name)
-    test = PBPDataset(test_ft, test_label, name)
+    train = PBPDataset(x=train_ft, y=train_label, name=name)
+    val = PBPDataset(x=val_ft, y=val_label, name=name)
+    test = PBPDataset(x=test_ft, y=test_label, name=name)
 
     params = train.standard_normalize()
     val.standard_normalize(*params)
     test.standard_normalize(*params)
 
     return (
-        DataLoader(train, shuffle=True, batch_size=batch_size),
-        DataLoader(val, shuffle=True, batch_size=batch_size),
-        DataLoader(test, batch_size=batch_size),
+        Loader(train, shuffle=True, batch_size=batch_size),
+        Loader(val, shuffle=True, batch_size=batch_size),
+        Loader(test, batch_size=batch_size),
     )
