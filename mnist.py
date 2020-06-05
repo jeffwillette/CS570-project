@@ -4,11 +4,11 @@ import csv
 import torch
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST  # type: ignore
-from torchvision.transforms import Compose, ToTensor
-from tqdm import tqdm
+from torchvision.transforms import Compose, ToTensor  # type: ignore
+from tqdm import tqdm  # type: ignore
 
 from concrete_dropout import ConcreteDropoutMNIST  # type: ignore
-from utils import Stats, log_likelihood
+from utils import ClassStats
 
 if __name__ == "__main__":
     # fmt: off
@@ -17,6 +17,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=32, help="instances in each batch")
     parser.add_argument("--samples", type=int, default=100, help="number of test time MC samples")
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
+    parser.add_argument("--runs", type=int, default=10, help="the number of runs to average")
     parser.add_argument("--val", action="store_true", help="use a validation set or not")
     args = parser.parse_args()
     # fmt: on
@@ -29,8 +30,8 @@ if __name__ == "__main__":
     lengthscale = 1e-2
     tau = 1.0
 
-    stats = Stats()
-    for run in range(10):
+    stats = ClassStats()
+    for run in range(args.runs):
 
         train_set = MNIST(
             "/home/jeff/datasets", download=True, train=True, transform=tx
@@ -39,14 +40,18 @@ if __name__ == "__main__":
             "/home/jeff/datasets", download=True, train=False, transform=tx
         )
 
-        train = DataLoader(train_set, shuffle=True, batch_size=32, num_workers=4)
-        test = DataLoader(test_set, shuffle=False, batch_size=128, num_workers=4)
+        train = DataLoader(
+            train_set, shuffle=True, batch_size=args.batch_size, num_workers=4
+        )
+        test = DataLoader(
+            test_set, shuffle=False, batch_size=args.batch_size, num_workers=4
+        )
 
         # l = prior lengthscale, tau = model precision, N = dataset instances
         # weight regularizer = l^2 / (tau N)
-        wr = lengthscale ** 2 / tau * len(train.dataset)
+        wr = lengthscale ** 2 / (tau * len(train.dataset))
         # dropout regularizer = 2 / tau N
-        dr = 2 / tau * len(train.dataset)
+        dr = 2 / (tau * len(train.dataset))
 
         for (x, y) in train:
             break
@@ -57,9 +62,9 @@ if __name__ == "__main__":
 
         log = tqdm(total=0, bar_format="{desc}", position=0)
 
-        model.train()
         its = 0
-        for epoch in tqdm(range(500), leave=False, position=2):
+        model.train()
+        for epoch in tqdm(range(args.epochs), leave=False, position=2):
             correct = 0
             total = 0
             for i, (x, y) in enumerate(tqdm(train, position=1, leave=False)):
@@ -81,18 +86,21 @@ if __name__ == "__main__":
         model.eval()
         with torch.no_grad():
             correct = 0
-            for i, (x, y) in enumerate(test):
+            for i, (x, y) in enumerate(tqdm(test, position=1, leave=False)):
                 x, y = x.to(device), y.to(device)
 
-                mus = torch.zeros(args.samples, 10, device=device)
+                mus = torch.zeros(args.samples, x.size(0), 10, device=device)
                 for j in range(args.samples):
-                    mus[j], _ = model(x)
+                    mus[j], _ = model(x.view(x.size(0), -1))
 
                 mus = mus.mean(dim=0)
                 correct += (torch.argmax(mus, dim=1) == y).sum()
 
-            print(f"test accuracy: {float(correct) / len(test_set)}")
+            stats.set(float(correct) / len(test_set))
+            print(f"test: {stats}")
 
-    with open("grid-search.csv", mode="a+") as f:
+    with open("mnist-results.csv", mode="a+") as f:
         writer = csv.writer(f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(["MNIST", lengthscale, tau, stats.ll, stats.rmse])
+        writer.writerow(
+            ["MNIST", lengthscale, tau, *model.get_p_floats(), *stats.get_acc()]
+        )
