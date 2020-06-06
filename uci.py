@@ -19,7 +19,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples", type=int, default=10000, help="number of test time MC samples")
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
     parser.add_argument("--val", action="store_true", help="use a validation set or not")
-    parser.add_argument("--runs", type=int, default=10, help="the number of runs to do")
+    parser.add_argument("--runs", type=int, default=20, help="the number of runs to do")
     args = parser.parse_args()
     # fmt: on
 
@@ -62,7 +62,8 @@ if __name__ == "__main__":
             best_model = model.state_dict()
             best_val_ll = float("-inf")
 
-            epochs = 1000 / (len(train.dataset) / args.batch_size)
+            epochs = max(1000 / (len(train.dataset) / args.batch_size), 40)
+            epochs = min(10000 / (len(train.dataset) / args.batch_size), epochs)
             for epoch in tqdm(range(int(epochs)), leave=False, position=0):
                 model.train()
                 for i, (x, y) in enumerate(tqdm(train, leave=False, position=1)):
@@ -86,7 +87,7 @@ if __name__ == "__main__":
 
                         mus = torch.zeros(args.samples, x.size(0), device=device)
                         logvars = torch.zeros(args.samples, x.size(0), device=device)
-                        for j in range(100):
+                        for j in range(10):
                             mus[j], logvars[j], _ = model(x)
 
                         ll = Normal(mus, torch.exp(logvars / 2)).log_prob(y)
