@@ -1,4 +1,5 @@
 import argparse
+import copy
 import csv
 
 import torch
@@ -13,7 +14,7 @@ from utils import ClassStats
 if __name__ == "__main__":
     # fmt: off
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=40, help="number of epochs")
+    parser.add_argument("--epochs", type=int, default=100, help="number of epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="instances in each batch")
     parser.add_argument("--samples", type=int, default=100, help="number of test time MC samples")
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
@@ -40,8 +41,20 @@ if __name__ == "__main__":
             "/home/jeff/datasets", download=True, train=False, transform=tx
         )
 
+        val_set = copy.deepcopy(train_set)
+
+        perm = torch.randperm(train_set.data.size(0))
+        train_set.data = train_set.data[perm[:55000]]
+        train_set.targets = train_set.targets[perm[:55000]]
+
+        val_set.data = val_set.data[perm[55000:]]
+        val_set.targets = val_set.targets[perm[55000:]]
+
         train = DataLoader(
             train_set, shuffle=True, batch_size=args.batch_size, num_workers=4
+        )
+        val = DataLoader(
+            val_set, shuffle=True, batch_size=args.batch_size, num_workers=4
         )
         test = DataLoader(
             test_set, shuffle=False, batch_size=args.batch_size, num_workers=4
@@ -60,13 +73,15 @@ if __name__ == "__main__":
         optimizer = torch.optim.Adam(model.parameters())
         criterion = torch.nn.CrossEntropyLoss()
 
+        best_model = model.state_dict()
+        best_val_acc = 0.0
+
         log = tqdm(total=0, bar_format="{desc}", position=0)
 
-        its = 0
-        model.train()
         for epoch in tqdm(range(args.epochs), leave=False, position=2):
             correct = 0
             total = 0
+            model.train()
             for i, (x, y) in enumerate(tqdm(train, position=1, leave=False)):
                 x, y = x.to(device), y.to(device)
 
@@ -80,9 +95,30 @@ if __name__ == "__main__":
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                its += 1
-            log.set_description(f"acc: {float(correct) / total} p: {model.get_p()}")
 
+            val_correct = 0.0
+            val_total = 0.0
+            model.eval()
+            with torch.no_grad():
+                for i, (x, y) in enumerate(tqdm(val, position=1, leave=False)):
+                    x, y = x.to(device), y.to(device)
+
+                    mus = torch.zeros(args.samples, x.size(0), 10, device=device)
+                    for j in range(args.samples):
+                        mus[j], _ = model(x.view(x.size(0), -1))
+
+                    mu = mus.mean(dim=0)
+                    val_correct += (torch.argmax(mu, dim=1) == y).sum()
+                    val_total += x.size(0)
+
+            val_acc = float(correct) / total
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_model = model.state_dict()
+                log.set_description(f"best val: {best_val_acc} p: {model.get_p()}")
+
+        model.load_state_dict(best_model)
+        torch.save(best_model, f"trained/MNIST-run-{run}.pt")
         model.eval()
         with torch.no_grad():
             correct = 0
@@ -99,8 +135,20 @@ if __name__ == "__main__":
             stats.set(float(correct) / len(test_set))
             print(f"test: {stats}")
 
-    with open("mnist-results.csv", mode="a+") as f:
+        with open("results/mnist-runs.csv", mode="a+") as f:
+            writer = csv.writer(
+                f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
+            )
+            writer.writerow(
+                [
+                    "MNIST",
+                    lengthscale,
+                    tau,
+                    *model.get_p_floats(),
+                    float(correct) / len(test_set),
+                ]
+            )
+
+    with open("results/mnist-final.csv", mode="a+") as f:
         writer = csv.writer(f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(
-            ["MNIST", lengthscale, tau, *model.get_p_floats(), *stats.get_acc()]
-        )
+        writer.writerow(["MNIST", lengthscale, tau, *stats.get_acc()])
