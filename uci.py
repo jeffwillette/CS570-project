@@ -39,142 +39,130 @@ if __name__ == "__main__":
     }
 
     for name in pbp_sets:
-        (lengthscale, tau) = hypers[name]
-        stats = Stats()
-        for run in range(args.runs):
-            train, val, test = get_pbp_sets(name, 32, get_val=args.val)
-            if val is None:
-                raise ValueError("need to use get_val flag")
+        for lengthscale in [0.0001, 0.001, 0.01, 0.1]:
+            for tau in [0.01, 0.1, 1.0]:
+                stats = Stats()
+                for run in range(args.runs):
+                    train, val, test = get_pbp_sets(name, 32, get_val=args.val)
 
-            # l = prior lengthscale, tau = model precision, N = dataset instances
-            # weight regularizer = l^2 / (tau N)
-            wr = lengthscale ** 2.0 / (tau * len(train.dataset))
-            # dropout regularizer = 2 / tau N
-            dr = 2 / (tau * len(train.dataset))
+                    # l = prior lengthscale, tau = model precision, N = dataset instances
+                    # weight regularizer = l^2 / (tau N)
+                    wr = lengthscale ** 2.0 / (tau * len(train.dataset))
+                    # dropout regularizer = 2 / tau N
+                    dr = 2 / (tau * len(train.dataset))
 
-            for (x, y) in train:
-                break
+                    for (x, y) in train:
+                        break
 
-            model = ConcreteDropoutUCI(x.size(1), 50, wr=wr, dr=dr).to(device)
-            optimizer = torch.optim.Adam(model.parameters())
-            log = tqdm(total=0, leave=False, bar_format="{desc}", position=2)
+                    model = ConcreteDropoutUCI(x.size(1), 50, wr=wr, dr=dr).to(device)
+                    optimizer = torch.optim.Adam(model.parameters())
+                    log = tqdm(total=0, leave=False, bar_format="{desc}", position=2)
 
-            best_model = model.state_dict()
-            best_val_ll = float("-inf")
-
-            epochs = max(1000 / (len(train.dataset) / args.batch_size), 40)
-            epochs = min(10000 / (len(train.dataset) / args.batch_size), epochs)
-            for epoch in tqdm(range(int(epochs)), leave=False, position=0):
-                model.train()
-                for i, (x, y) in enumerate(tqdm(train, leave=False, position=1)):
-                    x, y = x.to(device), y.to(device)
-
-                    mus, logvars, regularization = model(x)
-
-                    loss = torch.exp(-logvars) * (y - mus) ** 2 + logvars
-                    loss = loss.sum() + regularization
-
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                total_ll = 0.0
-                squared_err = 0.0
-                model.eval()
-                with torch.no_grad():
-                    for i, (x, y) in enumerate(val):
-                        x, y = x.to(device), y.to(device)
-
-                        mus = torch.zeros(args.samples, x.size(0), device=device)
-                        logvars = torch.zeros(args.samples, x.size(0), device=device)
-                        for j in range(10):
-                            mus[j], logvars[j], _ = model(x)
-
-                        ll = Normal(mus, torch.exp(logvars / 2)).log_prob(y)
-                        total_ll += torch.logsumexp(ll.sum(dim=1), dim=0).item()
-
-                total_ll = total_ll - np.log(args.samples)
-                total_ll /= len(val.dataset)
-                total_ll -= np.log(val.dataset.y_sigma.item())  # type: ignore
-
-                if total_ll > best_val_ll:
-                    best_val_ll = total_ll
                     best_model = model.state_dict()
 
-                log.set_description(
-                    f"best_val_ll: {best_val_ll:.4f} p: {model.get_p()}"
-                )
+                    epochs = max(1000 / (len(train.dataset) / args.batch_size), 40)
+                    epochs = min(10000 / (len(train.dataset) / args.batch_size), epochs)
+                    for epoch in tqdm(range(int(epochs)), leave=False, position=0):
+                        model.train()
+                        for i, (x, y) in enumerate(
+                            tqdm(train, leave=False, position=1)
+                        ):
+                            x, y = x.to(device), y.to(device)
 
-            # save model to file, and load these parameters into the model
-            torch.save(best_model, f"trained/{train.dataset}-{lengthscale}-{tau}.pt")
-            model.load_state_dict(best_model)
+                            mus, logvars, regularization = model(x)
 
-            model.eval()
-            with torch.no_grad():
-                squared_err = 0.0
-                total_ll = 0.0
-                aleatoric = 0.0
-                epistemic = 0.0
-                total_d_ll = 0.0
-                no_lse = 0.0
-                for i, (x, y) in enumerate(test):
-                    x, y = x.to(device), y.to(device)
+                            loss = torch.exp(-logvars) * (y - mus) ** 2 + logvars
+                            loss = loss.sum() + regularization
 
-                    mus = torch.zeros(args.samples, x.size(0), device=device)
-                    logvars = torch.zeros(args.samples, x.size(0), device=device)
-                    for j in range(args.samples):
-                        mus[j], logvars[j], _ = model(x)
+                            optimizer.zero_grad()
+                            loss.backward()
+                            optimizer.step()
 
-                    ll = Normal(mus, torch.exp(logvars / 2)).log_prob(y)
-                    total_ll += torch.logsumexp(ll.sum(dim=1), dim=0).item()
+                    # save model to file, and load these parameters into the model
+                    torch.save(
+                        model.state_dict(),
+                        f"trained/{train.dataset}-{lengthscale}-{tau}-run-{run}.pt",
+                    )
 
-                    epistemic += mus.mean(dim=0).sum().item()
-                    aleatoric += torch.exp(logvars).mean(dim=0).sum().item()
+                    model.eval()
+                    with torch.no_grad():
+                        squared_err = 0.0
+                        total_ll = 0.0
+                        aleatoric = 0.0
+                        epistemic = 0.0
+                        total_d_ll = 0.0
+                        no_lse = 0.0
+                        for i, (x, y) in enumerate(test):
+                            x, y = x.to(device), y.to(device)
 
-                    real_y = y * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
-                    real_mu = mus.mean(dim=0) * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
-                    squared_err += ((real_y - real_mu) ** 2).sum().item()
+                            mus = torch.zeros(args.samples, x.size(0), device=device)
+                            logvars = torch.zeros(
+                                args.samples, x.size(0), device=device
+                            )
+                            for j in range(args.samples):
+                                mus[j], logvars[j], _ = model(x)
 
-                aleatoric /= len(test.dataset)
-                epistemic /= len(test.dataset)
-                total_ll = total_ll - np.log(args.samples)
-                total_ll /= len(test.dataset)
-                total_ll -= np.log(test.dataset.y_sigma.item())  # type: ignore
+                            ll = Normal(mus, torch.exp(logvars / 2)).log_prob(y)
+                            total_ll += torch.logsumexp(ll.sum(dim=1), dim=0).item()
 
-                squared_err = (squared_err / len(test.dataset)) ** 0.5
+                            epistemic += mus.mean(dim=0).sum().item()
+                            aleatoric += torch.exp(logvars).mean(dim=0).sum().item()
 
-                stats.set(total_ll, squared_err, aleatoric, epistemic)
+                            real_y = y * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
+                            real_mu = mus.mean(dim=0) * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
+                            squared_err += ((real_y - real_mu) ** 2).sum().item()
 
-                print(f"{test.dataset} ll: {total_ll:.4f} rmse: {squared_err:.4f}")
-                print(f"running stats: {stats}")
+                        aleatoric /= len(test.dataset)
+                        epistemic /= len(test.dataset)
+                        total_ll = total_ll - np.log(args.samples)
+                        total_ll /= len(test.dataset)
+                        total_ll -= np.log(test.dataset.y_sigma.item())  # type: ignore
 
-                with open(f"results/{test.dataset}-runs.csv", mode="a+") as f:
+                        squared_err = (squared_err / len(test.dataset)) ** 0.5
+
+                        stats.set(total_ll, squared_err, aleatoric, epistemic)
+
+                        print(
+                            f"{test.dataset} ll: {total_ll:.4f} rmse: {squared_err:.4f}"
+                        )
+                        print(f"running stats: {stats}")
+
+                        with open(
+                            f"results/{test.dataset}-lengthscale-{lengthscale}-tau-{tau}-runs.csv",
+                            mode="a+",
+                        ) as f:
+                            writer = csv.writer(
+                                f,
+                                delimiter=",",
+                                quotechar='"',
+                                quoting=csv.QUOTE_MINIMAL,
+                            )
+                            writer.writerow(
+                                [
+                                    run,
+                                    *model.get_p_floats(),
+                                    total_ll,
+                                    squared_err,
+                                    aleatoric,
+                                    epistemic,
+                                ]
+                            )
+
+                with open(
+                    f"results/results-lengthscale-{lengthscale}-tau-{tau}.csv",
+                    mode="a+",
+                ) as f:
                     writer = csv.writer(
                         f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
                     )
                     writer.writerow(
                         [
-                            run,
+                            f"{name}",
+                            lengthscale,
+                            tau,
                             *model.get_p_floats(),
-                            total_ll,
-                            squared_err,
-                            aleatoric,
-                            epistemic,
+                            *stats.get_ll(),
+                            *stats.get_rmse(),
+                            *stats.get_uncertainties(),
                         ]
                     )
-
-        with open("results/results.csv", mode="a+") as f:
-            writer = csv.writer(
-                f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
-            )
-            writer.writerow(
-                [
-                    f"{name}",
-                    lengthscale,
-                    tau,
-                    *model.get_p_floats(),
-                    *stats.get_ll(),
-                    *stats.get_rmse(),
-                    *stats.get_uncertainties(),
-                ]
-            )
