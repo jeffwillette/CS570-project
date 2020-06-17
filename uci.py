@@ -8,7 +8,7 @@ from torch.distributions import Normal
 from tqdm import tqdm  # type: ignore
 
 from concrete_dropout import ConcreteDropoutUCI  # type: ignore
-from dataloader import get_pbp_sets, pbp_sets  # type: ignore
+from dataloader import get_pbp_sets  # type: ignore
 from utils import Stats
 
 if __name__ == "__main__":
@@ -27,142 +27,141 @@ if __name__ == "__main__":
     torch.manual_seed(0)
 
     hypers: Dict[str, Tuple[float, float]] = {
-        "bostonHousing": (1.0, 0.1),
-        "concrete": (0.0001, 2.0),
-        "energy": (1.0, 10.0),
-        "kin8nm": (0.1, 0.01),
-        "power-plant": (0.1, 0.1),
-        "wine-quality": (0.0001, 0.1),
-        "yacht": (0.01, 10.0),
-        "naval-propulsion": (0.1, 1.0),
-        "protein-tertiary-structure": (0.0001, 1.0),
+        "bostonHousing": (0.0001, 0.1),
+        "concrete": (0.001, 0.1),
+        "energy": (0.0001, 0.1),
+        "kin8nm": (0.1, 0.1),
+        "power-plant": (0.1, 1.0),
+        "wine-quality-red": (0.001, 0.01),
+        "yacht": (0.0001, 1.0),
+        "naval-propulsion-plant": (0.001, 1.0),
+        "protein-tertiary-structure": (0.0001, 0.1),
     }
 
-    for name in pbp_sets:
-        for lengthscale in [0.0001, 0.001, 0.01, 0.1]:
-            for tau in [0.01, 0.1, 1.0]:
-                stats = Stats()
-                for run in range(args.runs):
-                    train, val, test = get_pbp_sets(name, 32, get_val=args.val)
+    for name in hypers:
+        print(name)
+        (lengthscale, tau) = hypers[name]
+        stats = Stats()
+        for run in range(args.runs):
+            train, val, test = get_pbp_sets(name, args.batch_size, get_val=args.val)
 
-                    # l = prior lengthscale, tau = model precision, N = dataset instances
-                    # weight regularizer = l^2 / (tau N)
-                    wr = lengthscale ** 2.0 / (tau * len(train.dataset))
-                    # dropout regularizer = 2 / tau N
-                    dr = 2 / (tau * len(train.dataset))
+            # l = prior lengthscale, tau = model precision, N = dataset instances
+            # weight regularizer = l^2 / (tau N)
+            wr = lengthscale ** 2.0 / (tau * len(train.dataset))
+            # dropout regularizer = 2 / tau N
+            dr = 2 / (tau * len(train.dataset))
 
-                    for (x, y) in train:
-                        break
+            for (x, y) in train:
+                break
 
-                    model = ConcreteDropoutUCI(x.size(1), 50, wr=wr, dr=dr).to(device)
-                    optimizer = torch.optim.Adam(model.parameters())
-                    log = tqdm(total=0, leave=False, bar_format="{desc}", position=2)
+            h_dim = 50 if "protein" not in name else 100
+            model = ConcreteDropoutUCI(x.size(1), h_dim, wr=wr, dr=dr).to(device)
+            optimizer = torch.optim.Adam(model.parameters())
+            log = tqdm(total=0, leave=False, bar_format="{desc}", position=2)
 
-                    best_model = model.state_dict()
+            best_model = model.state_dict()
 
-                    epochs = max(1000 / (len(train.dataset) / args.batch_size), 40)
-                    epochs = min(10000 / (len(train.dataset) / args.batch_size), epochs)
-                    for epoch in tqdm(range(int(epochs)), leave=False, position=0):
-                        model.train()
-                        for i, (x, y) in enumerate(
-                            tqdm(train, leave=False, position=1)
-                        ):
-                            x, y = x.to(device), y.to(device)
+            epochs = max(1000 / (len(train.dataset) / args.batch_size), 40)
+            epochs = min(10000 / (len(train.dataset) / args.batch_size), epochs)
+            for epoch in tqdm(range(int(epochs)), leave=False, position=0):
+                model.train()
+                for i, (x, y) in enumerate(tqdm(train, leave=False, position=1)):
+                    x, y = x.to(device), y.to(device)
 
-                            mus, logvars, regularization = model(x)
+                    mus, logvars, regularization = model(x)
 
-                            loss = torch.exp(-logvars) * (y - mus) ** 2 + logvars
-                            loss = loss.sum() + regularization
+                    loss = torch.exp(-logvars) * (y - mus) ** 2 + logvars
+                    loss = loss.sum() + regularization
 
-                            optimizer.zero_grad()
-                            loss.backward()
-                            optimizer.step()
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
-                    # save model to file, and load these parameters into the model
-                    torch.save(
-                        model.state_dict(),
-                        f"trained/{train.dataset}-{lengthscale}-{tau}-run-{run}.pt",
-                    )
+            # save model to file, and load these parameters into the model
+            torch.save(
+                model.state_dict(),
+                f"trained/{train.dataset}-{lengthscale}-{tau}-run-{run}.pt",
+            )
 
-                    model.eval()
-                    with torch.no_grad():
-                        squared_err = 0.0
-                        total_ll = 0.0
-                        aleatoric = 0.0
-                        epistemic = 0.0
-                        total_d_ll = 0.0
-                        no_lse = 0.0
-                        for i, (x, y) in enumerate(test):
-                            x, y = x.to(device), y.to(device)
+            model.eval()
+            with torch.no_grad():
+                squared_err = 0.0
+                total_ll = 0.0
+                aleatoric = 0.0
+                epistemic = 0.0
+                # total_d_ll = 0.0
+                for i, (x, y) in enumerate(test):
+                    x, y = x.to(device), y.to(device)
 
-                            mus = torch.zeros(args.samples, x.size(0), device=device)
-                            logvars = torch.zeros(
-                                args.samples, x.size(0), device=device
-                            )
-                            for j in range(args.samples):
-                                mus[j], logvars[j], _ = model(x)
+                    mus = torch.zeros(args.samples, x.size(0), device=device)
+                    logvars = torch.zeros(args.samples, x.size(0), device=device)
+                    for j in range(args.samples):
+                        mus[j], logvars[j], _ = model(x)
 
-                            ll = Normal(mus, torch.exp(logvars / 2)).log_prob(y)
-                            total_ll += torch.logsumexp(ll.sum(dim=1), dim=0).item()
+                    ll = Normal(mus, torch.exp(logvars / 2)).log_prob(y)
+                    total_ll += torch.logsumexp(ll.sum(dim=1), dim=0).item()
 
-                            epistemic += mus.mean(dim=0).sum().item()
-                            aleatoric += torch.exp(logvars).mean(dim=0).sum().item()
+                    # mean = mus.mean(dim=0)
+                    # std = (
+                    #     mus.var(dim=0) + torch.exp(logvars / 2).mean(dim=0) ** 2
+                    # ) ** 0.5
+                    # total_d_ll += Normal(mean, std).log_prob(y).sum()
 
-                            real_y = y * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
-                            real_mu = mus.mean(dim=0) * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
-                            squared_err += ((real_y - real_mu) ** 2).sum().item()
+                    epistemic += mus.var(dim=0).mean().item()
+                    aleatoric += torch.exp(logvars).mean(dim=0).sum().item()
 
-                        aleatoric /= len(test.dataset)
-                        epistemic /= len(test.dataset)
-                        total_ll = total_ll - np.log(args.samples)
-                        total_ll /= len(test.dataset)
-                        total_ll -= np.log(test.dataset.y_sigma.item())  # type: ignore
+                    real_y = y * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
+                    real_mu = mus.mean(dim=0) * test.dataset.y_sigma + test.dataset.y_mu  # type: ignore
+                    squared_err += ((real_y - real_mu) ** 2).sum().item()
 
-                        squared_err = (squared_err / len(test.dataset)) ** 0.5
+                aleatoric /= len(test.dataset)
+                epistemic /= len(test.dataset)
 
-                        stats.set(total_ll, squared_err, aleatoric, epistemic)
+                total_ll = total_ll - np.log(args.samples)
+                total_ll /= len(test.dataset)
+                total_ll -= np.log(test.dataset.y_sigma.item())  # type: ignore
 
-                        print(
-                            f"{test.dataset} ll: {total_ll:.4f} rmse: {squared_err:.4f}"
-                        )
-                        print(f"running stats: {stats}")
+                # total_d_ll /= len(test.dataset)
+                # total_d_ll -= np.log(test.dataset.y_sigma.item())  # type: ignore
+                # print(f"total_ll: {total_ll} total_d_ll: {total_d_ll}")
 
-                        with open(
-                            f"results/{test.dataset}-lengthscale-{lengthscale}-tau-{tau}-runs.csv",
-                            mode="a+",
-                        ) as f:
-                            writer = csv.writer(
-                                f,
-                                delimiter=",",
-                                quotechar='"',
-                                quoting=csv.QUOTE_MINIMAL,
-                            )
-                            writer.writerow(
-                                [
-                                    run,
-                                    *model.get_p_floats(),
-                                    total_ll,
-                                    squared_err,
-                                    aleatoric,
-                                    epistemic,
-                                ]
-                            )
+                squared_err = (squared_err / len(test.dataset)) ** 0.5
+
+                stats.set(total_ll, squared_err, aleatoric, epistemic)
+
+                print(f"{test.dataset} ll: {total_ll:.4f} rmse: {squared_err:.4f}")
+                print(f"running stats: {stats}")
 
                 with open(
-                    f"results/results-lengthscale-{lengthscale}-tau-{tau}.csv",
+                    f"results/{test.dataset}-batch-{args.batch_size}-lengthscale-{lengthscale}-tau-{tau}-runs.csv",
                     mode="a+",
                 ) as f:
                     writer = csv.writer(
-                        f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
+                        f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL,
                     )
                     writer.writerow(
                         [
-                            f"{name}",
-                            lengthscale,
-                            tau,
+                            run,
                             *model.get_p_floats(),
-                            *stats.get_ll(),
-                            *stats.get_rmse(),
-                            *stats.get_uncertainties(),
+                            total_ll,
+                            squared_err,
+                            aleatoric,
+                            epistemic,
                         ]
                     )
+
+        with open(f"results/uci-results-batch-{args.batch_size}.csv", mode="a+",) as f:
+            writer = csv.writer(
+                f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
+            )
+            writer.writerow(
+                [
+                    f"{name}",
+                    lengthscale,
+                    tau,
+                    *model.get_p_floats(),
+                    *stats.get_ll(),
+                    *stats.get_rmse(),
+                    *stats.get_uncertainties(),
+                ]
+            )

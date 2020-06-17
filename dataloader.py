@@ -289,7 +289,7 @@ def get_pbp_sets(
         return (
             Loader(train, shuffle=True, batch_size=batch_size),
             None,
-            Loader(test, batch_size=batch_size),
+            Loader(test, batch_size=batch_size * 100),
         )
 
     val_n = train_idx // 10
@@ -314,6 +314,6 @@ def get_pbp_sets(
 
     return (
         Loader(train, shuffle=True, batch_size=batch_size),
-        Loader(val, shuffle=True, batch_size=batch_size),
-        Loader(test, batch_size=batch_size),
+        Loader(val, shuffle=True, batch_size=batch_size * 100),
+        Loader(test, batch_size=batch_size * 100),
     )

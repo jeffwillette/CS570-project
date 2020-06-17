@@ -24,14 +24,13 @@ def random_color() -> np.array:
     return np.random.rand(3)
 
 
-if __name__ == "__main__":
+def plot_mnist() -> None:
     # make a plot of MNIST and the dropout probabilities for every run
     with open("results/mnist-runs.csv", "r") as f:
         reader = csv.reader(f, delimiter=",")
         probs = []
         for row in reader:
-            l = [float(i) for i in row[3:7]]
-            probs.append(l)
+            probs.append([float(i) for i in row[3:7]])
 
         probs = np.array(probs)
         colors = [random_color() for _ in range(probs.shape[1])]
@@ -54,6 +53,8 @@ if __name__ == "__main__":
         fig.savefig("charts/mnist-p.png")
         plt.clf()
 
+
+def plot_uci() -> None:
     # for each of the UCI datasets, plot dropout probabilities for each run
     for dataset in dataset_best:
         (lengthscale, tau) = dataset_best[dataset]
@@ -63,7 +64,8 @@ if __name__ == "__main__":
         uncertainties = []
 
         with open(
-            f"results/{dataset}-lengthscale-{lengthscale}-tau-{tau}-runs.csv", "r"
+            f"results/{dataset}-batch-32-lengthscale-{lengthscale}-tau-{tau}-runs.csv",
+            "r",
         ) as f:
             reader = csv.reader(f, delimiter=",")
             for row in reader:
@@ -113,3 +115,8 @@ if __name__ == "__main__":
             ax3.set_title(f"{dataset} aleatoric and epistemic uncertainty")
 
             fig.savefig(f"charts/{dataset}.png")
+
+
+if __name__ == "__main__":
+    # plot_mnist()
+    plot_uci()
