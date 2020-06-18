@@ -54,6 +54,19 @@ def plot_mnist() -> None:
         plt.clf()
 
 
+def plot_rl_p(p: np.array) -> None:
+    fig, (ax1, ax2, ax3) = plt.subplots(nrows=1, ncols=3, figsize=(21, 6))
+
+    ax1.plot(p[:, 0], label="layer 0")
+    ax1.legend()
+    ax2.plot(p[:, 1], label="layer 1")
+    ax2.legend()
+    ax3.plot(p[:, 2], label="layer 2")
+    ax3.legend()
+
+    fig.savefig("reinforcement-learning-p.png")
+
+
 def plot_uci() -> None:
     # for each of the UCI datasets, plot dropout probabilities for each run
     for dataset in dataset_best:

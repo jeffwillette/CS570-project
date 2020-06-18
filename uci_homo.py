@@ -48,8 +48,6 @@ if __name__ == "__main__":
 
         for lengthscale in lengthscales:
             for tau in taus[name]:
-                var = 1.0 / tau
-
                 stats = Stats()
                 for run in range(args.runs):
                     train, _, test = get_pbp_sets(name, args.batch_size, get_val=False)
@@ -86,13 +84,6 @@ if __name__ == "__main__":
 
                             loss = ((y - mu) ** 2).sum() + regularization
 
-                            nat_mu = mu * train.dataset.y_sigma + train.dataset.y_mu  # type: ignore
-                            nat_y = y * train.dataset.y_sigma + train.dataset.y_mu  # type: ignore
-
-                            logvar_loss = Normal(
-                                nat_mu.detach(), np.sqrt(var)
-                            ).log_prob(nat_y)
-
                             optimizer.zero_grad()
                             loss.backward(retain_graph=True)
 
@@ -102,7 +93,7 @@ if __name__ == "__main__":
                     with torch.no_grad():
                         squared_err = 0.0
                         total_ll = 0.0
-                        aleatoric = 0.0
+                        aleatoric = 1 / tau
                         epistemic = 0.0
                         # total_d_ll = 0.0
                         for i, (x, y) in enumerate(test):
@@ -112,8 +103,24 @@ if __name__ == "__main__":
                             for j in range(args.samples):
                                 mus[j], _ = model(x)
 
-                            ll = Normal(mus, np.sqrt(var)).log_prob(y)
-                            total_ll += torch.logsumexp(ll.sum(dim=1), dim=0).item()
+                            nat_mu = mus * train.dataset.y_sigma + train.dataset.y_mu  # type: ignore
+                            nat_y = y * train.dataset.y_sigma + train.dataset.y_mu  # type: ignore
+
+                            # this works with the tau outside of the logsumexp because tau is constant for
+                            # all predictions. tau is also 1/sigma^2 so it it log(1) - log(sigma^2) which turns
+                            # it into the plain equation for negative log likelihood.
+                            total_ll += (
+                                (
+                                    torch.logsumexp(
+                                        -0.5 * tau * (nat_y - nat_mu) ** 2, dim=0
+                                    ).cpu()
+                                    - np.log(args.samples)
+                                    - 0.5 * np.log(2 * np.pi)
+                                    + 0.5 * np.log(tau)
+                                )
+                                .sum()
+                                .item()
+                            )
 
                             epistemic += mus.var(dim=0).mean().item()
                             # aleatoric += torch.exp(logvar).mean(dim=0).sum().item()
@@ -125,9 +132,7 @@ if __name__ == "__main__":
                         aleatoric /= len(test.dataset)
                         epistemic /= len(test.dataset)
 
-                        total_ll = total_ll - np.log(args.samples)
                         total_ll /= len(test.dataset)
-                        total_ll -= np.log(test.dataset.y_sigma.item())  # type: ignore
 
                         squared_err = (squared_err / len(test.dataset)) ** 0.5
                         stats.set(total_ll, squared_err, aleatoric, epistemic)

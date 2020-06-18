@@ -5,15 +5,21 @@ import torch
 import torch.nn as nn
 
 
-class CDLayer(nn.Module):
+class CDConvLayer(nn.Module):
     def __init__(
         self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = True,
         weight_regularizer: float = 1e-6,
         dropout_regularizer: float = 1e-5,
         init_min: float = 0.1,
         init_max: float = 0.1,
     ):
-        super(CDLayer, self).__init__()
+        super(CDConvLayer, self).__init__()
 
         self.weight_regularizer = weight_regularizer
         self.dropout_regularizer = dropout_regularizer
@@ -21,19 +27,32 @@ class CDLayer(nn.Module):
         init_mn = np.log(init_min) - np.log(1.0 - init_min)
         init_mx = np.log(init_max) - np.log(1.0 - init_max)
 
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=True,
+        )
         self.p_logit = nn.Parameter(  # type: ignore
             torch.empty(1).uniform_(init_mn, init_mx)
         )
 
+        self.first = True
+
+    def get_p(self) -> float:
+        return torch.sigmoid(self.p_logit).item()
+
     def forward(  # type: ignore
-        self, x: torch.Tensor, layer: nn.Module
+        self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         p = torch.sigmoid(self.p_logit)
 
-        out = layer(self._concrete_dropout(x, p))
+        out = self.conv(self._concrete_dropout(x, p))
 
         sum_of_square = 0.0
-        for name, param in layer.named_parameters():
+        for name, param in self.conv.named_parameters():
             sum_of_square = sum_of_square + torch.sum(torch.pow(param, 2))  # type: ignore
 
         weights_regularizer = (
@@ -43,8 +62,9 @@ class CDLayer(nn.Module):
         dropout_regularizer = p * torch.log(p)
         dropout_regularizer += (1.0 - p) * torch.log(1.0 - p)  # type: ignore
 
-        print(f"in forward: channels should be the first index: {x.size()}")
-        raise ValueError()
+        if self.first:
+            print(f"in forward: channels should be the first index: {x.size()}")
+            self.first = False
 
         input_dimensionality = x.size(1)  # Number of elements of first item in batch
         dropout_regularizer *= self.dropout_regularizer * input_dimensionality
@@ -56,13 +76,10 @@ class CDLayer(nn.Module):
         eps = 1e-7
         temp = 2.0 / 3.0
 
-        print(f"in concrete dropout: channels should be the first index: {x.size()}")
-        raise ValueError()
-
         noise_shape = (x.size(0), x.size(1), 1, 1)
-        unif_noise = torch.rand(noise_shape)
+        unif_noise = torch.rand(noise_shape, device=x.device)
 
-        print(f"unif noise: {unif_noise.shape}")
+        # print(f"unif noise: {unif_noise.shape}")
 
         drop_prob = (
             torch.log(p + eps)
@@ -81,6 +98,7 @@ class CDLayer(nn.Module):
         return x
 
 
+# TODO: this needs to be updated if it is going to be used
 class ConvConcreteDropoutModel(nn.Module):
     def __init__(self, ft: int, h_dim: int, wr: float = 1e-6, dr: float = 1e-5):
         super(ConvConcreteDropoutModel, self).__init__()
